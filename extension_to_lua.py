@@ -118,11 +118,13 @@ files
 #define __''' + output_file_prefix_upper + '''_H
 
 // tolua_begin
+
 namespace ''' + output_api_name + ''' {
 '''
 
     output_api_footer_h = '''
 } //namespace ''' + output_api_name + '''
+
 // tolua_end
 
 #endif // ''' + output_file_prefix_upper + '''_H
@@ -133,6 +135,8 @@ namespace ''' + output_api_name + ''' {
 #include "''' + source_api_name + '''.h"
 #include "QLuaHelpers.h"
 #include "lua.h"
+
+using namespace quick;
 
 namespace ''' + output_api_name + ''' {
 '''
@@ -150,7 +154,41 @@ namespace ''' + output_api_name + ''' {
     #TODO output functions should go in a list that can be searched/edited before printing
     #e.g. to insert register/unregister calls if needed
     
+    # Get list of all the functions
     funcs_found = re.finditer(r'(\S+)\s+(\S+)\((.*?)\);', input_raw)
+
+    # Find the callbacks enum list
+    callbacks = re.search(r'typedef\s+enum\s+(' + source_api_name + r'Callback)\s*\{(.*?)\}', input_raw, re.DOTALL)
+    callback_list = []
+    callback_type = None
+    
+    if callbacks:
+        callback_type = callbacks.group(1)
+        
+        # Find all the actual callback names (example: S3E_MYEXTENSION_CALLBACK_NAME_CALLBACK = 0, //comments)
+        # These are user deefined so could hae all sorts of names. Do our best to guess...
+        callback_names = re.finditer(r'^\s*(.*?)\s*[,=]', callbacks.group(2), re.MULTILINE)
+        if callback_names:
+            for name_match in callback_names:
+                name = name_match.group(1)
+                if name.endswith("MAX"):
+                    continue
+                name_for_func = name.lower()
+                name_for_func = name_for_func.replace('s3e', '')
+                name_for_func = name_for_func.replace(source_api_name.lower(), '')
+                name_for_func = name_for_func.replace(output_api_name.lower(), '')
+                name_for_func = name_for_func.replace('callback', '')
+                name_for_func = name_for_func.split('_')
+                final_name = ''
+                
+                for part in name_for_func:
+                    if len(part) == 0: # "_" -> empty string
+                        continue
+                        
+                    final_name += part[0].upper()
+                    if len(part) > 1:
+                        final_name += part[1:]
+                callback_list.append((name, final_name))
     
     func_reg = None
     func_unreg = None
@@ -170,14 +208,20 @@ namespace ''' + output_api_name + ''' {
         if func_name.startswith('('): #function pointers for callbacks
             continue
         
-        if return_type.startswith(source_api_name):
+        call_return = 'return '
+        original_return_type = return_type
+        
+        if return_type == "void":
+            call_return = ''
+        elif return_type.startswith(source_api_name):
             if return_type.endswith('*'):
                 extra_info += "\n    //FIXME: Looks like this returns a struct pointer or similar.\n    //Consider adding some custom Lua code to turn struct into a table.\n"
             else:
                 extra_info += "\n    //FIXME: Returning a string instead of " + return_type + " - needs converting\n"
-                return_type = "const char*" #Assume its an enum and return a string
+                return_type = 'const char*' #Assume its an enum and return a string
         elif return_type == 's3eBool':
             return_type = 'bool'
+            call_return += '(bool)'
         elif return_type == 's3eResult':
             return_type = 'bool'
             s3eResult = True
@@ -191,10 +235,12 @@ namespace ''' + output_api_name + ''' {
         # declared next to the name instead of type)
         params_found = re.finditer(r'(.+?)([^*\s,]+)(,|$)', params)
         params = ''
+        param_list = []
         call_params = ''
         for param in params_found:
             param_type = param.group(1).strip()
             param_name = param.group(2).strip()
+            param_list.append((param_type,param_name))
             
             if param_type.startswith(source_api_name):
                 if param_type.endswith('CallbackFn'):
@@ -222,13 +268,26 @@ namespace ''' + output_api_name + ''' {
         # For now, we'll just print these hints into the init and terminate functions,
         # But eventually should automate this completely
         if func_name == source_api_name + "Register":
-            func_reg = "//FIXME: Probably need to register callbacks here using:\n    " + func.group(0)
+            func_reg = "//Register all callbacks here:"
+            reg_type, reg_name = param_list[0]
+            
+            if reg_type == callback_type:
+                for callback_info in callback_list:
+                    callback_id, callback_fn = callback_info
+                    func_reg += '\n    ' + func_name + '(' + callback_id + ', ' + callback_fn + 'Callback, NULL);'
+            
             continue
         
-        if func_name == source_api_name + "UnRegister":
-            func_unreg = "//FIXME: Probably need to un-register callbacks here using:\n    " + func.group(0)
+        if func_name == source_api_name + "UnRegister":            
+            func_unreg = "//Un-register all callbacks here:"
+            reg_type, reg_name = param_list[0]
+            
+            if reg_type == callback_type:
+                for callback_info in callback_list:
+                    callback_id, callback_fn = callback_info
+                    func_unreg += '\n    ' + func_name + '(' + callback_id + ', ' + callback_fn + 'Callback);'
             continue
-        
+            
         func_name_lua = func_name
         
         if func_name.startswith(source_api_name):
@@ -246,11 +305,7 @@ namespace ''' + output_api_name + ''' {
         # May want to look for functions that have char* (non const) params and put a
         # note on how that will become a multiple return value!
         
-        call_return = 'return '
-        if return_type == "void":
-            call_return = ''
-            
-        output_list.append({'return_type': return_type, 'call_return': call_return, 'func_name': func_name, 'func_name_lua': func_name_lua, 'params': params, 'call_params': call_params})
+        output_list.append({'return_type': return_type, 'call_return': call_return, 'func_name': func_name, 'func_name_lua': func_name_lua, 'params': params, 'call_params': call_params, 'original_return_type': original_return_type})
         
         if len(extra_info) > 0:
             output_list[func_id]['extra_info'] = extra_info
@@ -279,7 +334,7 @@ namespace ''' + output_api_name + ''' {
             
         if not got_init and special_funcs['start']:
             reg_key = special_funcs['start']
-        else:
+        elif not got_init:
             new_entry = {'func_name_lua': 'start', 'params': '', 'return_type': 'void'}
             if reg_key: # init func was found -> insert after it
                 reg_key += 1
@@ -308,21 +363,59 @@ namespace ''' + output_api_name + ''' {
             
         output_list[unreg_key]['register'] = func_unreg
     
+    if len(callback_list) > 0:
+        output_functions_cpp += '\n//------------------------------------------------------------------------------\n//C++ callbacks -> Lua events:\n'
+        
+        for callback_info in callback_list:
+            callback_id, callback_fn = callback_info
+            output_functions_cpp += '''
+int32 ''' + callback_fn + '''Callback(void* systemData, void* userData)
+{
+    LUA_EVENT_PREPARE("''' + output_api_name + '''");
+    LUA_EVENT_SET_STRING("type", "''' + callback_fn.lower() + '''");
+    //LUA_EVENT_SET_BOOLEAN("???", ???);
+    //LUA_EVENT_SET_STRING("???", ???);
+    //LUA_EVENT_SET_INTEGER("???", ???);
+    LUA_EVENT_SEND();
+    lua_pop(g_L, 1);
+
+    return 0;
+}
+'''
+    
+    output_functions_cpp += '\n//------------------------------------------------------------------------------\n//Functions:\n'
+    
     for values in output_list:
         output_function = values['return_type'] + ' ' + values['func_name_lua'] + '(' + values['params'] + ')'
         
-        output_functions_h += '\n    ' + output_function + ';'
+        out_pre = '\n    '
+        func_called_so_return_this = False
         
+        output_functions_h += out_pre + output_function + ';'
         output_functions_cpp += '\n' + output_function + '\n{'
         
         if 'register' in values:
-            output_functions_cpp += '\n    ' + values['register'] + '\n'
+            if 'func_name' in values and values['original_return_type'] == 's3eResult':
+                output_functions_cpp += out_pre + 'if(' +  values['func_name'] + '(' + values['call_params'] + ') == S3E_RESULT_ERROR)' + out_pre + '    return false;\n'
+                func_called_so_return_this = 'true'
+        
+            output_functions_cpp += out_pre + values['register'] + '\n'
             
         if 'extra_info' in values:
             output_functions_cpp += values['extra_info']
             
         if 'func_name' in values:
-            output_functions_cpp += '\n    ' + values['call_return'] + values['func_name'] + '(' + values['call_params'] + ');\n'
+            output_functions_cpp += out_pre + values['call_return']
+
+            if func_called_so_return_this:
+                output_functions_cpp += func_called_so_return_this
+            else:
+                output_functions_cpp += values['func_name'] + '(' + values['call_params'] + ')'
+                
+                if values['original_return_type'] == 's3eResult':
+                    output_functions_cpp += ' == S3E_RESULT_SUCCESS ? true : false'
+                
+            output_functions_cpp += ';\n'
         
         output_functions_cpp += '}\n'
 
