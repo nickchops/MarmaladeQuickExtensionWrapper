@@ -123,6 +123,7 @@ namespace ''' + output_api_name + ''' {
 '''
 
     output_api_footer_h = '''
+    
 } //namespace ''' + output_api_name + '''
 
 // tolua_end
@@ -158,7 +159,7 @@ namespace ''' + output_api_name + ''' {
     funcs_found = re.finditer(r'(\S+)\s+(\S+)\((.*?)\);', input_raw)
 
     # Find the callbacks enum list
-    callbacks = re.search(r'typedef\s+enum\s+(' + source_api_name + r'Callback)\s*\{(.*?)\}', input_raw, re.DOTALL)
+    callbacks = re.search(r'(?:typedef\s+)?enum\s+(' + source_api_name + r'Callback)\s*\{(.*?)\}', input_raw, re.DOTALL)
     callback_list = []
     callback_type = None
     
@@ -372,7 +373,7 @@ namespace ''' + output_api_name + ''' {
 int32 ''' + callback_fn + '''Callback(void* systemData, void* userData)
 {
     LUA_EVENT_PREPARE("''' + output_api_name + '''");
-    LUA_EVENT_SET_STRING("type", "''' + callback_fn.lower() + '''");
+    LUA_EVENT_SET_STRING("type", "''' + callback_fn[0].lower() + callback_fn[1:] + '''");
     //LUA_EVENT_SET_BOOLEAN("???", ???);
     //LUA_EVENT_SET_STRING("???", ???);
     //LUA_EVENT_SET_INTEGER("???", ???);
