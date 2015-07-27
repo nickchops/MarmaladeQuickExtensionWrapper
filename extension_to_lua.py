@@ -226,6 +226,12 @@ namespace ''' + output_api_name + ''' {
         elif return_type == 's3eResult':
             return_type = 'bool'
             s3eResult = True
+        elif return_type == 'int32':
+            return_type = 'int'
+            call_return += '(int)'
+        elif return_type == 'uint32':
+            return_type = 'unsigned int'
+            call_return += '(unsigned int)'
         elif return_type == 'int64' or return_type == 'uint64':
             extra_info += "\n    //WARNING: Returning a " + return_type + " - This may have issues if the\n    //potential range is outside of the max/min values Lua can represent!\n    //Lua 5.1 uses double precision floats for numbers, which gives about 1000 below\n    //the max value for an int64 when using integers, for example\n"
         # else leave as is for user to fix if needed
